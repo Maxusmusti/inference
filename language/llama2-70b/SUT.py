@@ -14,6 +14,9 @@ import threading
 import tqdm
 import queue
 
+from huggingface_hub import InferenceClient
+import concurrent
+
 import logging
 from typing import TYPE_CHECKING, Optional, List
 from pathlib import Path
@@ -80,6 +83,7 @@ class FirstTokenStreamer(BaseStreamer):
 class SUT():
     def __init__(self,
                  model_path=None,
+                 api_server=None,
                  dtype="bfloat16",
                  device="cpu",
                  batch_size=None,
@@ -89,6 +93,7 @@ class SUT():
                  workers=1):
 
         self.model_path = model_path or "meta-llama/Llama-2-70b-chat-hf"
+        self.api_server = api_server
         self.device = device
 
         if not batch_size:
@@ -191,20 +196,33 @@ class SUT():
                 assert input_ids_tensor.shape == input_masks_tensor.shape
                 assert input_ids_tensor.shape[0] <= self.batch_size
 
+                if self.api_server:
+                    decoded = self.tokenizer.batch_decode(input_ids_tensor)
+                    cleaned = [entry.replace('</s>','').replace('<s>','') for entry in decoded]
+                    bs = len(cleaned)
+
                 tik2 = time.time()
 
-                pred_output_tokens = self.model.generate(
-                    input_ids=input_ids_tensor,
-                    attention_mask=input_masks_tensor,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    **gen_kwargs
-                )
+                if self.api_server:
+                    def api_gen_text(text): return self.client.generate(text,max_new_tokens=1024).generated_text
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as executor:
+                        output = list(executor.map(api_gen_text,cleaned))
+                else:
+                    pred_output_tokens = self.model.generate(
+                        input_ids=input_ids_tensor,
+                        attention_mask=input_masks_tensor,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        **gen_kwargs
+                    )
 
                 tik3 = time.time()
 
-                processed_output = self.data_object.postProcess(pred_output_tokens,
-                                                                input_seq_lens=input_len,
-                                                                query_id_list=query_ids)
+                if self.api_server:
+                    processed_output = np.array(self.tokenizer(output))
+                else:
+                    processed_output = self.data_object.postProcess(pred_output_tokens,
+                                                                    input_seq_lens=input_len,
+                                                                    query_id_list=query_ids)
 
             for i in range(len(qitem)):
                 n_tokens = processed_output[i].shape[0]
@@ -228,26 +246,29 @@ class SUT():
 
 
     def load_model(self):
-        self.model = LlamaForCausalLM.from_pretrained(
-            self.model_path,
-            device_map="auto",
-            low_cpu_mem_usage=True,
-            torch_dtype=self.amp_dtype
-        )
-        print("Loaded model")
+        if self.api_server:
+            self.client = InferenceClient(model=self.api_server)
+        else:
+            self.model = LlamaForCausalLM.from_pretrained(
+                self.model_path,
+                device_map="auto",
+                low_cpu_mem_usage=True,
+                torch_dtype=self.amp_dtype
+            )
+            print("Loaded model")
 
-        self.device = torch.device(self.device)
-        if self.device == "cpu":
-            self.model = self.model.to(self.device)  # Force CPU if your system has GPU and you specifically want CPU-only run
+            self.device = torch.device(self.device)
+            if self.device == "cpu":
+                self.model = self.model.to(self.device)  # Force CPU if your system has GPU and you specifically want CPU-only run
 
-        self.model.eval()
-        self.model = self.model.to(memory_format=torch.channels_last)
+            self.model.eval()
+            self.model = self.model.to(memory_format=torch.channels_last)
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_path,
             model_max_length=1024,
             padding_side="left",
-            use_fast=False,)
+            use_fast=True,) #changed from false
 
         self.tokenizer.pad_token = self.tokenizer.eos_token
         print("Loaded tokenizer")
@@ -285,7 +306,7 @@ class SUT():
 
 
 class SUTServer(SUT):
-    def __init__(self, model_path=None, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
+    def __init__(self, model_path=None, api_server=None, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
 
         super().__init__(model_path=model_path, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
 
