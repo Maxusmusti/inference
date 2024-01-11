@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import numpy as np
 import array
@@ -14,8 +15,12 @@ import threading
 import tqdm
 import queue
 
-from huggingface_hub import InferenceClient
-import concurrent
+from concurrent.futures.thread import ThreadPoolExecutor
+import requests
+from urllib3.exceptions import InsecureRequestWarning
+import json
+
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 import logging
 from typing import TYPE_CHECKING, Optional, List
@@ -84,6 +89,7 @@ class SUT():
     def __init__(self,
                  model_path=None,
                  api_server=None,
+                 api_model_name=None,
                  dtype="bfloat16",
                  device="cpu",
                  batch_size=None,
@@ -94,6 +100,7 @@ class SUT():
 
         self.model_path = model_path or "meta-llama/Llama-2-70b-chat-hf"
         self.api_server = api_server
+        self.api_model_name = api_model_name
         self.device = device
 
         if not batch_size:
@@ -151,6 +158,30 @@ class SUT():
             worker.join()
 
 
+    def query_api(self, input):
+        headers = {
+            'Content-Type': 'application/json',
+        }
+
+        json_data = {
+            'model_id': self.api_model_name,
+            'inputs': input,
+            'parameters': {
+                'max_new_tokens': 1024,
+                'min_new_tokens': 1,
+            },
+        }
+
+        response = requests.post(
+            'https://' + self.api_server,
+            headers=headers,
+            json=json_data,
+            verify=False,
+        )
+
+        return json.loads(response.text)["generated_text"]
+
+
     def process_queries(self):
         """Processor of the queued queries. User may choose to add batching logic """
 
@@ -204,9 +235,8 @@ class SUT():
                 tik2 = time.time()
 
                 if self.api_server:
-                    def api_gen_text(text): return self.client.generate(text,max_new_tokens=1024).generated_text
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=bs) as executor:
-                        output = list(executor.map(api_gen_text,cleaned))
+                    with ThreadPoolExecutor(max_workers=bs) as executor:
+                        output = list(executor.map(self.query_api,cleaned))
                 else:
                     pred_output_tokens = self.model.generate(
                         input_ids=input_ids_tensor,
@@ -218,7 +248,7 @@ class SUT():
                 tik3 = time.time()
 
                 if self.api_server:
-                    processed_output = np.array(self.tokenizer(output))
+                    processed_output = np.array(self.tokenizer(output, padding='longest')['input_ids'])
                 else:
                     processed_output = self.data_object.postProcess(pred_output_tokens,
                                                                     input_seq_lens=input_len,
@@ -247,7 +277,11 @@ class SUT():
 
     def load_model(self):
         if self.api_server:
-            self.client = InferenceClient(model=self.api_server)
+            if not "http" in self.api_server:
+                self.api_server = "http://" + self.api_server
+
+            if not self.api_model_name:
+                sys.exit("API Server was specified but no model name was provided")
         else:
             self.model = LlamaForCausalLM.from_pretrained(
                 self.model_path,
