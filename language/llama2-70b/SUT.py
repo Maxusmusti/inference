@@ -105,7 +105,7 @@ class SUT():
 
         if not batch_size:
             if device == "cpu":
-                batch_size = 1
+                batch_size = 32
             else:
                 batch_size = 32  # Reduce to 8 if using 4 GPUs, 16 for 8.
         self.batch_size = batch_size
@@ -173,7 +173,7 @@ class SUT():
         }
 
         response = requests.post(
-            'https://' + self.api_server,
+            self.api_server,
             headers=headers,
             json=json_data,
             verify=False,
