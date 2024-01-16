@@ -340,11 +340,16 @@ class SUT():
 
 
 class SUTServer(SUT):
-    def __init__(self, model_path=None, api_server=None, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
+    def __init__(self, model_path=None, api_server=None, api_model_name=None, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
 
-        super().__init__(model_path=model_path, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
+        super().__init__(model_path=model_path, api_server=api_server, api_model_name=api_model_name, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
+
+        with open(f"{self.model_path}/tokenizer.json", 'r') as token_file:
+            llama_tokenizer = json.load(token_file)
+        self.llama_vocab = llama_tokenizer["model"]["vocab"]
 
         self.first_token_queue = queue.Queue()
+        
 
     def start(self):
 
@@ -375,6 +380,44 @@ class SUTServer(SUT):
             response = [lg.QuerySampleResponse(response_id, bi[0], bi[1])]
             lg.FirstTokenComplete(response)
 
+    def stream_api(self, input, response_ids):
+        headers = {
+            'Content-Type': 'application/json',
+        }
+
+        json_data = {
+            'model_id': 'Llama-2-70b-chat-hf-caikit',
+            'inputs': input,
+            'parameters': {
+                'max_new_tokens': 1024,
+                'min_new_tokens': 1,
+            },
+        }
+
+        token_cache = []
+        s = requests.Session()
+        first = True
+        with s.post(
+            self.api_server,
+            headers=headers,
+            json=json_data,
+            verify=False,
+            stream=True
+        ) as resp:
+            for line in resp.iter_lines():
+                if line:
+                    decoded = line.decode()
+                    if decoded.startswith("data"):
+                        token_l = json.loads(decoded[6:])["tokens"]
+                        if token_l:
+                            token = self.llama_vocab[token_l[0]["text"]]
+                            if first:
+                                self.first_token.put((token, response_ids[0]))
+                                first = False
+                            else:
+                                token_cache.append(token)
+        return token_cache
+
     def process_queries(self):
         """Processor of the queued queries. User may choose to add batching logic """
         while True:
@@ -386,18 +429,26 @@ class SUTServer(SUT):
             input_ids_tensor = self.data_object.input_ids[qitem.index]
             input_masks_tensor = self.data_object.attention_masks[qitem.index]
 
+            if self.api_server:
+                decoded = self.tokenizer.decode(input_ids_tensor)
+                tokens_cache = []
+                response_ids = [qitem.id]
+                output_tokens = self.stream_api(decoded, response_ids)
+
+            else:
             #TODO: This PoC is super slow with significant overhead. Best to create a patch to `generate`
-            tokens_cache = []
-            tokens_streamer = FirstTokenStreamer(self.first_token_queue, tokens_cache=tokens_cache, is_first_token=True, response_ids=[qitem.id])
+                tokens_cache = []
+                tokens_streamer = FirstTokenStreamer(self.first_token_queue, tokens_cache=tokens_cache, is_first_token=True, response_ids=[qitem.id])
 
-            _ = self.model.generate(    input_ids=input_ids_tensor,
-                                        attention_mask=input_masks_tensor,
-                                        pad_token_id=self.tokenizer.pad_token_id,
-                                        streamer = tokens_streamer,
-                                        **gen_kwargs
-                                        )
+                _ = self.model.generate(    input_ids=input_ids_tensor,
+                                            attention_mask=input_masks_tensor,
+                                            pad_token_id=self.tokenizer.pad_token_id,
+                                            streamer = tokens_streamer,
+                                            **gen_kwargs
+                                            )
 
-            output_tokens = tokens_streamer.get_out_tokens()
+                output_tokens = tokens_streamer.get_out_tokens()
+
             n_tokens = len(output_tokens)
             response_array = array.array("B", np.array(output_tokens, np.int32).tobytes())
             bi = response_array.buffer_info()
