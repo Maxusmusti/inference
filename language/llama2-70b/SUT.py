@@ -412,7 +412,7 @@ class SUTServer(SUT):
                         if token_l:
                             token = self.llama_vocab[token_l[0]["text"]]
                             if first:
-                                self.first_token.put((token, response_ids[0]))
+                                self.first_token_queue.put((token, response_ids[0]))
                                 first = False
                             else:
                                 token_cache.append(token)
@@ -430,13 +430,13 @@ class SUTServer(SUT):
             input_masks_tensor = self.data_object.attention_masks[qitem.index]
 
             if self.api_server:
-                decoded = self.tokenizer.decode(input_ids_tensor)
+                decoded = self.tokenizer.decode(input_ids_tensor[0])
                 tokens_cache = []
                 response_ids = [qitem.id]
                 output_tokens = self.stream_api(decoded, response_ids)
 
             else:
-            #TODO: This PoC is super slow with significant overhead. Best to create a patch to `generate`
+                #TODO: This PoC is super slow with significant overhead. Best to create a patch to `generate`
                 tokens_cache = []
                 tokens_streamer = FirstTokenStreamer(self.first_token_queue, tokens_cache=tokens_cache, is_first_token=True, response_ids=[qitem.id])
 
