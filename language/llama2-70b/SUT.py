@@ -418,6 +418,19 @@ class SUTServer(SUT):
                                 token_cache.append(token)
         return token_cache
 
+    def async_process_query(self, input_ids_tensor, qitem_id):
+        decoded = self.tokenizer.decode(input_ids_tensor[0])
+        response_ids = [qitem_id]
+        output_tokens = self.stream_api(decoded, response_ids)
+
+        n_tokens = len(output_tokens)
+        response_array = array.array("B", np.array(output_tokens, np.int32).tobytes())
+        bi = response_array.buffer_info()
+        response = [lg.QuerySampleResponse(
+            qitem_id, bi[0], bi[1], n_tokens)]
+        lg.QuerySamplesComplete(response)
+        sys.exit()
+
     def process_queries(self):
         """Processor of the queued queries. User may choose to add batching logic """
         while True:
@@ -430,11 +443,7 @@ class SUTServer(SUT):
             input_masks_tensor = self.data_object.attention_masks[qitem.index]
 
             if self.api_server:
-                decoded = self.tokenizer.decode(input_ids_tensor[0])
-                tokens_cache = []
-                response_ids = [qitem.id]
-                output_tokens = self.stream_api(decoded, response_ids)
-
+                threading.Thread(target=self.async_process_query, args=(input_ids_tensor, qitem.id)).start()
             else:
                 #TODO: This PoC is super slow with significant overhead. Best to create a patch to `generate`
                 tokens_cache = []
@@ -449,12 +458,12 @@ class SUTServer(SUT):
 
                 output_tokens = tokens_streamer.get_out_tokens()
 
-            n_tokens = len(output_tokens)
-            response_array = array.array("B", np.array(output_tokens, np.int32).tobytes())
-            bi = response_array.buffer_info()
-            response = [lg.QuerySampleResponse(
-                qitem.id, bi[0], bi[1], n_tokens)]
-            lg.QuerySamplesComplete(response)
+                n_tokens = len(output_tokens)
+                response_array = array.array("B", np.array(output_tokens, np.int32).tobytes())
+                bi = response_array.buffer_info()
+                response = [lg.QuerySampleResponse(
+                    qitem.id, bi[0], bi[1], n_tokens)]
+                lg.QuerySamplesComplete(response)
 
 
     def issue_queries(self, query_samples):
