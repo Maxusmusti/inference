@@ -169,6 +169,7 @@ class SUT():
             'parameters': {
                 'max_new_tokens': 1024,
                 'min_new_tokens': 1,
+                'decoding_method': "GREEDY"
             },
         }
 
@@ -391,6 +392,7 @@ class SUTServer(SUT):
             'parameters': {
                 'max_new_tokens': 1024,
                 'min_new_tokens': 1,
+                'decoding_method': "GREEDY"
             },
         }
 
