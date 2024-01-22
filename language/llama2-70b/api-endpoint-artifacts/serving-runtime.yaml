@@ -68,7 +68,7 @@ spec:
         - name: MAX_BATCH_WEIGHT
           value: "540000"
         - name: MAX_SEQUENCE_LENGTH
-          value: "4096"
+          value: "2048"
         - name: MAX_PREFILL_WEIGHT
           value: "0"
         - name: MAX_NEW_TOKENS
