@@ -62,11 +62,11 @@ spec:
           #  value: float16
         # Dynamic batch size changes
         - name: MAX_BATCH_SIZE
-          value: "256"
+          value: "128"
         - name: MAX_CONCURRENT_REQUESTS
-          value: "256"
+          value: "200"
         - name: MAX_BATCH_WEIGHT
-          value: "540000"
+          value: "550000"
         - name: MAX_SEQUENCE_LENGTH
           value: "2048"
         - name: MAX_PREFILL_WEIGHT
@@ -79,8 +79,8 @@ spec:
           value: hf_custom_tp
       resources: # configure as required
         requests:
-          cpu: 36
-          memory: 700Gi
+          cpu: 64
+          memory: 900Gi
           nvidia.com/gpu: 8
         limits:
           nvidia.com/gpu: 8
@@ -88,7 +88,7 @@ spec:
       image: quay.io/opendatahub/caikit-tgis-serving:fast
       env:
         - name: RUNTIME_GRPC_SERVER_THREAD_POOL_SIZE
-          value: "160"
+          value: "200"
       volumeMounts:
         - name: config-volume
           mountPath: /caikit/config/

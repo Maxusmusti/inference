@@ -8,6 +8,8 @@ metadata:
   name: llama-2-70b-chat-isvc
 spec:
   predictor:
+    minReplicas: 1
+    maxReplicas: 1
     apiVersion: serving.kserve.io/v1alpha2
     serviceAccountName: sa
     timeout: 240
