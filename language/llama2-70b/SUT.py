@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import re
 import numpy as np
 import array
 import torch
@@ -19,6 +20,8 @@ from concurrent.futures.thread import ThreadPoolExecutor
 import requests
 from urllib3.exceptions import InsecureRequestWarning
 import json
+
+from inference import GrpcClient
 
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
@@ -90,6 +93,8 @@ class SUT():
                  model_path=None,
                  api_server=None,
                  api_model_name=None,
+                 grpc=False,
+                 batch_grpc=False,
                  dtype="bfloat16",
                  device="cpu",
                  batch_size=None,
@@ -101,11 +106,13 @@ class SUT():
         self.model_path = model_path or "meta-llama/Llama-2-70b-chat-hf"
         self.api_server = api_server
         self.api_model_name = api_model_name
+        self.grpc = grpc
+        self.batch_grpc = batch_grpc
         self.device = device
 
         if not batch_size:
             if device == "cpu":
-                batch_size = 110
+                batch_size = 300
             else:
                 batch_size = 32  # Reduce to 8 if using 4 GPUs, 16 for 8.
         self.batch_size = batch_size
@@ -173,15 +180,28 @@ class SUT():
             },
         }
 
-        response = requests.post(
-            self.api_server,
-            headers=headers,
-            json=json_data,
-            verify=False,
-        )
-
+        response_code = 0
+        while response_code != 200:
+            try:
+                response = requests.post(
+                    self.api_server,
+                    headers=headers,
+                    json=json_data,
+                    verify=False,
+                )
+                response_code = response.status_code
+            except:
+                print("connection failure")
         return json.loads(response.text)["generated_text"]
+    
 
+    def query_api_grpc(self, input):
+        resp = self.grpc_client.make_request([input], model_id=self.api_model_name)
+        return resp.responses[0].text
+
+    def query_api_batch_grpc(self, inputs):
+        resps = self.grpc_client.make_request(inputs, model_id=self.api_model_name)
+        return [resp.text for resp in resps.responses]
 
     def process_queries(self):
         """Processor of the queued queries. User may choose to add batching logic """
@@ -236,8 +256,15 @@ class SUT():
                 tik2 = time.time()
 
                 if self.api_server:
-                    with ThreadPoolExecutor(max_workers=bs) as executor:
-                        output = list(executor.map(self.query_api,cleaned))
+                    if self.grpc:
+                        if self.batch_grpc:
+                            output = self.query_api_batch_grpc(cleaned)
+                        else:
+                            with ThreadPoolExecutor(max_workers=bs) as executor:
+                                output = list(executor.map(self.query_api_grpc,cleaned))
+                    else:
+                        with ThreadPoolExecutor(max_workers=bs) as executor:
+                            output = list(executor.map(self.query_api,cleaned))
                 else:
                     pred_output_tokens = self.model.generate(
                         input_ids=input_ids_tensor,
@@ -278,7 +305,16 @@ class SUT():
 
     def load_model(self):
         if self.api_server:
-            if not "http" in self.api_server:
+            if self.grpc:
+                hostname = re.sub("https://|http://", "", self.api_server)
+                if hostname[-1] == "/":
+                    hostname = hostname[:-1]
+                self.grpc_client = GrpcClient(
+                    hostname,
+                    443,
+                    verify=False,
+                )
+            elif not "http" in self.api_server:
                 self.api_server = "http://" + self.api_server
 
             if not self.api_model_name:
@@ -341,9 +377,9 @@ class SUT():
 
 
 class SUTServer(SUT):
-    def __init__(self, model_path=None, api_server=None, api_model_name=None, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
+    def __init__(self, model_path=None, api_server=None, api_model_name=None, grpc=False, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
 
-        super().__init__(model_path=model_path, api_server=api_server, api_model_name=api_model_name, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
+        super().__init__(model_path=model_path, api_server=api_server, api_model_name=api_model_name, grpc=grpc, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
 
         with open(f"{self.model_path}/tokenizer.json", 'r') as token_file:
             llama_tokenizer = json.load(token_file)
