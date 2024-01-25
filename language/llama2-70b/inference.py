@@ -81,6 +81,9 @@ class GrpcClient:
                    stopping=generation_pb2_grpc.generation__pb2.StoppingCriteria(
                        max_new_tokens=1024,
                        min_new_tokens=1
+                   ),
+                   response=generation_pb2_grpc.generation__pb2.ResponseOptions(
+                       generated_tokens=True
                    )
             )
         )

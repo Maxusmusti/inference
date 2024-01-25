@@ -461,14 +461,13 @@ class SUTServer(SUT):
         first = True
         resps = self.grpc_client.make_request_stream(input, model_id=self.api_model_name)
         for resp in resps:
-            if resp.text:
-                tokens = self.tokenizer(resp.text)["input_ids"][1:]
+            if resp.tokens:
+                token = self.llama_vocab[resp.tokens[0].text]
                 if first:
-                    self.first_token_queue.put((tokens[0], response_ids[0]))
-                    token_cache.extend(tokens[1:])
+                    self.first_token_queue.put((token, response_ids[0]))
                     first = False
                 else:
-                    token_cache.extend(tokens)
+                    token_cache.append(token)
         return token_cache
 
     def async_process_query(self, input_ids_tensor, qitem_id):
