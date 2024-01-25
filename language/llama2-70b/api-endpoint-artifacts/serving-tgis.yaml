@@ -24,11 +24,11 @@ spec:
           #  value: float16
         # Dynamic batch size changes
         - name: MAX_BATCH_SIZE
-          value: "256"
+          value: "512"
         - name: MAX_CONCURRENT_REQUESTS
-          value: "300"
+          value: "5000"
         - name: MAX_BATCH_WEIGHT
-          value: "550000"
+          value: "1000000"
         - name: MAX_SEQUENCE_LENGTH
           value: "2048"
         - name: MAX_PREFILL_WEIGHT
@@ -43,8 +43,8 @@ spec:
           value: "5"
       resources: # configure as required
         requests:
-          cpu: 64
-          memory: 900Gi
+          cpu: 96
+          memory: 1000Gi
           nvidia.com/gpu: 8
         limits:
           nvidia.com/gpu: 8

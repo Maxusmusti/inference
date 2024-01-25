@@ -71,6 +71,21 @@ class GrpcClient:
         )
         result = self.generation_service_stub.Generate(request=request)
         return result
+    
+    def make_request_stream(self, text: str, model_id: str = "flan-t5-small"):
+        request = generation_pb2_grpc.generation__pb2.SingleGenerationRequest(
+            model_id=model_id,
+            request=generation_pb2_grpc.generation__pb2.GenerationRequest(text=text),
+            params=generation_pb2_grpc.generation__pb2.Parameters(
+                   method=generation_pb2_grpc.generation__pb2.GREEDY,
+                   stopping=generation_pb2_grpc.generation__pb2.StoppingCriteria(
+                       max_new_tokens=1024,
+                       min_new_tokens=1
+                   )
+            )
+        )
+        result = self.generation_service_stub.GenerateStream(request=request)
+        return result
 
     def __enter__(self):
         return self

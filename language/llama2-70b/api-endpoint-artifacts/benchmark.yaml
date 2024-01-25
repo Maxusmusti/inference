@@ -6,7 +6,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: mlperf-env
-    image: quay.io/meyceoz/mlperf-inference:grpc-batch
+    image: quay.io/meyceoz/mlperf-inference:grpc-stream
     resources:
       requests:
         memory: 20000Mi
