@@ -377,7 +377,7 @@ class SUT():
 
 
 class SUTServer(SUT):
-    def __init__(self, model_path=None, api_server=None, api_model_name=None, grpc=False, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
+    def __init__(self, model_path=None, api_server=None, api_model_name=None, grpc=False, batch_grpc=False, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
 
         super().__init__(model_path=model_path, api_server=api_server, api_model_name=api_model_name, grpc=grpc, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
 
