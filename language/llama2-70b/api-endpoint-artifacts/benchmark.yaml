@@ -6,7 +6,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: mlperf-env
-    image: quay.io/meyceoz/mlperf-inference:v7
+    image: quay.io/meyceoz/mlperf-inference:v8
     resources:
       requests:
         memory: 20000Mi
