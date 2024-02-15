@@ -111,7 +111,7 @@ class SUT():
 
         if not batch_size:
             if device == "cpu":
-                batch_size = 2
+                batch_size = 128
             else:
                 batch_size = 32  # Reduce to 8 if using 4 GPUs, 16 for 8.
         self.batch_size = batch_size
@@ -462,7 +462,7 @@ class SUTServer(SUT):
         return token_cache
 
     def async_process_query(self, input_ids_tensor, qitem_id):
-        decoded = [input_ids_tensor]
+        decoded = input_ids_tensor
         response_ids = [qitem_id]
         if self.grpc:
             output_tokens = self.stream_api_grpc(decoded, response_ids)
@@ -486,7 +486,7 @@ class SUTServer(SUT):
                 break
 
             input_ids_tensor = self.data_object.source_encoded_input_ids[qitem.index]
-            input_masks_tensor = self.data_object.source_encoded_attn_masks[qitem.index]
+            input_masks_tensor = []#self.data_object.source_encoded_attn_masks[qitem.index]
 
             if self.api_server:
                 threading.Thread(target=self.async_process_query, args=(input_ids_tensor, qitem.id)).start()
