@@ -310,6 +310,7 @@ class SUT():
             if not self.api_model_name:
                 sys.exit("API Server was specified but no model name was provided")
         else:
+            sys.exit("ONLY API SERVER MODE SUPPORTED FOR GPT-J")
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
                 device_map="auto",
@@ -461,7 +462,7 @@ class SUTServer(SUT):
         return token_cache
 
     def async_process_query(self, input_ids_tensor, qitem_id):
-        decoded = self.tokenizer.decode(input_ids_tensor[0])
+        decoded = [input_ids_tensor]
         response_ids = [qitem_id]
         if self.grpc:
             output_tokens = self.stream_api_grpc(decoded, response_ids)
