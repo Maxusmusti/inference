@@ -51,7 +51,7 @@ class Dataset():
         self.targets = [
             f"{example['output']}" for example in self.list_data_dict]
 
-        self.source_encoded_input_ids, self.source_encoded_attn_masks = self.encode_samples()
+        self.source_encoded_input_ids = self.encode_samples()#, self.source_encoded_attn_masks = self.encode_samples()
 
         self.count = total_count_override or len(self.sources)
         self.perf_count = perf_count_override or self.count
@@ -62,16 +62,19 @@ class Dataset():
         total_samples = len(self.sources)
 
         source_encoded_input_ids = []
-        source_encoded_attn_masks = []
+        #source_encoded_attn_masks = []
 
         for i in range(total_samples):
-            source_encoded = self.tokenizer(self.sources[i], return_tensors="pt",
-                                            padding=True, truncation=True,
-                                            max_length=1919)
-            source_encoded_input_ids.append(source_encoded.input_ids)
-            source_encoded_attn_masks.append(source_encoded.attention_mask)
+            #source_encoded = self.tokenizer(self.sources[i], return_tensors="pt",
+            #                                padding=True, truncation=True,
+            #                                max_length=1919)
+            tok = self.tokenizer(self.sources[i])["input_ids"]
+            if len(tok) > 1920:
+                self.sources[i] = self.sources[i][:-16 - (len(tok) - 1920)*4] + self.sources[i][-16:]
+            source_encoded_input_ids.append(self.sources[i])
+            #source_encoded_attn_masks.append(source_encoded.attention_mask)
 
-        return source_encoded_input_ids, source_encoded_attn_masks
+        return source_encoded_input_ids#, source_encoded_attn_masks
 
     def LoadSamplesToRam(self, sample_list):
         pass
