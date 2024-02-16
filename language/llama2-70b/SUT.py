@@ -22,6 +22,8 @@ from urllib3.exceptions import InsecureRequestWarning
 import json
 
 from inference import GrpcClient
+import more_itertools as mit
+from itertools import repeat
 
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
@@ -93,6 +95,7 @@ class SUT():
                  model_path=None,
                  api_server=None,
                  api_model_name=None,
+                 additional_servers=[],
                  grpc=False,
                  batch_grpc=False,
                  dtype="bfloat16",
@@ -104,7 +107,13 @@ class SUT():
                  workers=1):
 
         self.model_path = model_path or "meta-llama/Llama-2-70b-chat-hf"
-        self.api_server = api_server
+        self.api_servers = []
+        if api_server:
+            self.api_servers.append(api_server)
+        if additional_servers and not api_server:
+            sys.exit("Additional servers cannot be used without primary api server")
+        for server in additional_servers:
+            self.api_servers.append(server)
         self.api_model_name = api_model_name
         self.grpc = grpc
         self.batch_grpc = batch_grpc
@@ -165,7 +174,7 @@ class SUT():
             worker.join()
 
 
-    def query_api(self, input):
+    def query_api(self, input, idx):
         headers = {
             'Content-Type': 'application/json',
         }
@@ -184,7 +193,7 @@ class SUT():
         while response_code != 200:
             try:
                 response = requests.post(
-                    self.api_server,
+                    self.api_servers[idx],
                     headers=headers,
                     json=json_data,
                     verify=False,
@@ -195,13 +204,25 @@ class SUT():
         return json.loads(response.text)["generated_text"]
     
 
-    def query_api_grpc(self, input):
-        resp = self.grpc_client.make_request([input], model_id=self.api_model_name)
+    def query_api_grpc(self, input, idx):
+        resp = self.grpc_clients[idx].make_request([input], model_id=self.api_model_name)
         return resp.responses[0].text
 
-    def query_api_batch_grpc(self, inputs):
-        resps = self.grpc_client.make_request(inputs, model_id=self.api_model_name)
+    def query_api_batch_grpc(self, inputs, idx):
+        resps = self.grpc_clients[idx].make_request(inputs, model_id=self.api_model_name)
         return [resp.text for resp in resps.responses]
+    
+    def api_action_handler(self, chunk, server_idx):
+        if self.grpc:
+            if self.batch_grpc:
+                output = self.query_api_batch_grpc(chunk, server_idx)
+            else:
+                with ThreadPoolExecutor(max_workers=len(chunk)) as executor:
+                    output = list(executor.map(self.query_api_grpc,chunk, repeat(server_idx)))
+        else:
+            with ThreadPoolExecutor(max_workers=len(chunk)) as executor:
+                output = list(executor.map(self.query_api,chunk, repeat(server_idx)))
+        return output
 
     def process_queries(self):
         """Processor of the queued queries. User may choose to add batching logic """
@@ -248,23 +269,20 @@ class SUT():
                 assert input_ids_tensor.shape == input_masks_tensor.shape
                 assert input_ids_tensor.shape[0] <= self.batch_size
 
-                if self.api_server:
+                if self.api_servers:
                     decoded = self.tokenizer.batch_decode(input_ids_tensor)
                     cleaned = [entry.replace('</s>','').replace('<s>','') for entry in decoded]
-                    bs = len(cleaned)
+                    cleaned_chunks = [list(c) for c in mit.divide(len(self.api_servers), cleaned)]
 
                 tik2 = time.time()
 
-                if self.api_server:
-                    if self.grpc:
-                        if self.batch_grpc:
-                            output = self.query_api_batch_grpc(cleaned)
-                        else:
-                            with ThreadPoolExecutor(max_workers=bs) as executor:
-                                output = list(executor.map(self.query_api_grpc,cleaned))
-                    else:
-                        with ThreadPoolExecutor(max_workers=bs) as executor:
-                            output = list(executor.map(self.query_api,cleaned))
+                if self.api_servers:
+                    with ThreadPoolExecutor(max_workers=len(self.api_servers)) as executor:
+                        #needs to be tested
+                        output_chunks = list(executor.map(self.api_action_handler,cleaned_chunks,range(len(self.api_servers))))
+                    output = []
+                    for row in output_chunks:
+                        output += row
                 else:
                     pred_output_tokens = self.model.generate(
                         input_ids=input_ids_tensor,
@@ -275,7 +293,7 @@ class SUT():
 
                 tik3 = time.time()
 
-                if self.api_server:
+                if self.api_servers:
                     processed_output = np.array(self.tokenizer(output, padding='longest')['input_ids'])
                 else:
                     processed_output = self.data_object.postProcess(pred_output_tokens,
@@ -304,21 +322,24 @@ class SUT():
 
 
     def load_model(self):
-        if self.api_server:
-            if self.grpc:
-                hostname = re.sub("https://|http://", "", self.api_server)
-                if hostname[-1] == "/":
-                    hostname = hostname[:-1]
-                self.grpc_client = GrpcClient(
-                    hostname,
-                    443,
-                    verify=False,
-                )
-            elif not "http" in self.api_server:
-                self.api_server = "http://" + self.api_server
-
+        if self.api_servers:
             if not self.api_model_name:
                 sys.exit("API Server was specified but no model name was provided")
+            self.grpc_clients = []
+            for server in self.api_servers:
+                if self.grpc:
+                    hostname = re.sub("https://|http://", "", server)
+                    if hostname[-1] == "/":
+                        hostname = hostname[:-1]
+                    grpc_client = GrpcClient(
+                        hostname,
+                        443,
+                        verify=False,
+                    )
+                    self.grpc_clients.append(grpc_client)
+                elif not "http" in server:
+                    server = "http://" + server
+
         else:
             self.model = LlamaForCausalLM.from_pretrained(
                 self.model_path,
@@ -417,7 +438,7 @@ class SUTServer(SUT):
             response = [lg.QuerySampleResponse(response_id, bi[0], bi[1])]
             lg.FirstTokenComplete(response)
 
-    def stream_api(self, input, response_ids):
+    def stream_api(self, input, response_ids, idx):
         headers = {
             'Content-Type': 'application/json',
         }
@@ -436,7 +457,7 @@ class SUTServer(SUT):
         s = requests.Session()
         first = True
         with s.post(
-            self.api_server,
+            self.api_servers[idx],
             headers=headers,
             json=json_data,
             verify=False,
@@ -456,10 +477,10 @@ class SUTServer(SUT):
                                 token_cache.append(token)
         return token_cache
 
-    def stream_api_grpc(self, input, response_ids):
+    def stream_api_grpc(self, input, response_ids, idx):
         token_cache = []
         first = True
-        resps = self.grpc_client.make_request_stream(input, model_id=self.api_model_name)
+        resps = self.grpc_clients[idx].make_request_stream(input, model_id=self.api_model_name)
         for resp in resps:
             if resp.tokens:
                 token = self.llama_vocab[resp.tokens[0].text]
@@ -470,13 +491,13 @@ class SUTServer(SUT):
                     token_cache.append(token)
         return token_cache
 
-    def async_process_query(self, input_ids_tensor, qitem_id):
+    def async_process_query(self, input_ids_tensor, qitem_id, idx):
         decoded = self.tokenizer.decode(input_ids_tensor[0])
         response_ids = [qitem_id]
         if self.grpc:
-            output_tokens = self.stream_api_grpc(decoded, response_ids)
+            output_tokens = self.stream_api_grpc(decoded, response_ids, idx)
         else:
-            output_tokens = self.stream_api(decoded, response_ids)
+            output_tokens = self.stream_api(decoded, response_ids, idx)
 
         n_tokens = len(output_tokens)
         response_array = array.array("B", np.array(output_tokens, np.int32).tobytes())
@@ -488,6 +509,7 @@ class SUTServer(SUT):
 
     def process_queries(self):
         """Processor of the queued queries. User may choose to add batching logic """
+        server_idx = 0
         while True:
 
             qitem = self.query_queue.get()
@@ -497,8 +519,9 @@ class SUTServer(SUT):
             input_ids_tensor = self.data_object.input_ids[qitem.index]
             input_masks_tensor = self.data_object.attention_masks[qitem.index]
 
-            if self.api_server:
-                threading.Thread(target=self.async_process_query, args=(input_ids_tensor, qitem.id)).start()
+            if self.api_servers:
+                threading.Thread(target=self.async_process_query, args=(input_ids_tensor, qitem.id, server_idx)).start()
+                server_idx = (server_idx + 1) % len(self.api_servers)
             else:
                 #TODO: This PoC is super slow with significant overhead. Best to create a patch to `generate`
                 tokens_cache = []
