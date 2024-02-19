@@ -20,8 +20,8 @@ spec:
           value: /tmp/transformers_cache
         - name: NUM_GPUS
           value: "1"
-          #- name: DTYPE_STR
-          #  value: float16
+        - name: DTYPE_STR
+          value: float16
         # Dynamic batch size changes
         - name: MAX_BATCH_SIZE
           value: "64"

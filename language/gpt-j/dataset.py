@@ -69,8 +69,9 @@ class Dataset():
             #                                padding=True, truncation=True,
             #                                max_length=1919)
             tok = self.tokenizer(self.sources[i])["input_ids"]
-            if len(tok) > 1920:
+            while len(tok) > 1920:
                 self.sources[i] = self.sources[i][:-16 - (len(tok) - 1920)*4] + self.sources[i][-16:]
+                tok = self.tokenizer(self.sources[i])["input_ids"]
             source_encoded_input_ids.append(self.sources[i])
             #source_encoded_attn_masks.append(source_encoded.attention_mask)
 
