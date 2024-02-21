@@ -23,8 +23,6 @@ import json
 
 from inference import GrpcClient
 
-from vllm import LLM, SamplingParams
-
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 import logging
@@ -196,17 +194,29 @@ class SUT():
                 print("connection failure")
         return json.loads(response.text)["generated_text"]
     
-    def query_vllm(self, inputs):
-        sampling_params = SamplingParams(
-            max_tokens=128,
-            use_beam_search=True,
-            best_of=4,
-            temperature=0,
-            early_stopping=True,
-        )
+    def query_api_vllm(self, inputs):
+        headers = {
+            'Content-Type': 'application/json',
+        }
 
-        outputs = self.llm.generate(inputs, sampling_params)
-        return [output.outputs[0].text for output in outputs]
+        json_data = {
+            'model': '/mnt/models/',
+            'prompt': inputs,
+            'max_tokens': 128,
+            'use_beam_search': True,
+            'best_of': 4,
+            'temperature': 0,
+            'early_stopping': True
+        }
+
+        response_code = 0
+        while response_code != 200:
+            try:
+                response = requests.post(f'{self.api_server}/v1/completions', headers=headers, json=json_data, verify=False)
+                response_code = response.status_code
+            except:
+                print("connection failure")
+        return [resp["text"] for resp in json.loads(response.text)["choices"]]
 
     def query_api_grpc(self, input):
         resp = self.grpc_client.make_request([input], model_id=self.api_model_name)
@@ -270,7 +280,7 @@ class SUT():
                             with ThreadPoolExecutor(max_workers=bs) as executor:
                                 output = list(executor.map(self.query_api_grpc,input_ids_tensor))
                     elif self.vllm:
-                        output = self.query_vllm(input_ids_tensor)
+                        output = self.query_api_vllm(input_ids_tensor)
                     else:
                         with ThreadPoolExecutor(max_workers=bs) as executor:
                             output = list(executor.map(self.query_api,input_ids_tensor))
@@ -323,8 +333,6 @@ class SUT():
                     443,
                     verify=False,
                 )
-            elif self.vllm:
-                self.llm = LLM(model="/workspace/gpt-model-info/", dtype="float16")
             elif not "http" in self.api_server:
                 self.api_server = "http://" + self.api_server
 
