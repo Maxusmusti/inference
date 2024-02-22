@@ -27,13 +27,13 @@ spec:
           protocol: TCP
       resources: # configure as required
         requests:
-          cpu: 96
-          memory: 1024Gi
-          nvidia.com/gpu: 8
+          cpu: 24
+          memory: 128Gi
+          nvidia.com/gpu: 1
         limits:
-          cpu: 96
-          memory: 1024Gi
-          nvidia.com/gpu: 8
+          cpu: 24
+          memory: 128Gi
+          nvidia.com/gpu: 1
       volumeMounts:
       - mountPath: /dev/shm
         name: dshm
