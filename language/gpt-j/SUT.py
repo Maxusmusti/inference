@@ -124,7 +124,7 @@ class SUT():
 
         if not batch_size:
             if device == "cpu": # Also applies to API server mode
-                batch_size = 13368
+                batch_size = 31192
             else:
                 batch_size = 32  # Reduce to 8 if using 4 GPUs, 16 for 8.
         self.batch_size = batch_size
