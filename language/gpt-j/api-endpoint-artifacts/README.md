@@ -26,6 +26,8 @@ python3 -u main.py --scenario Offline --model-path ${CHECKPOINT_PATH} --api-serv
 ```
 (It is the same, just with `--accuracy` removed)
 
+ - For multiple endpoints, add `--additional-servers <server 1> <server 2> ...`
+
 
 For the performance benchmark (server), run in the pod:
 ```

@@ -124,7 +124,7 @@ class SUT():
 
         if not batch_size:
             if device == "cpu": # Also applies to API server mode
-                batch_size = 128
+                batch_size = 13368
             else:
                 batch_size = 32  # Reduce to 8 if using 4 GPUs, 16 for 8.
         self.batch_size = batch_size
@@ -406,9 +406,9 @@ class SUT():
 
 
 class SUTServer(SUT):
-    def __init__(self, model_path=None, api_server=None, additional_servers=[], api_model_name=None, grpc=False, batch_grpc=False, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
+    def __init__(self, model_path=None, api_server=None, additional_servers=[], api_model_name=None, grpc=False, batch_grpc=False, vllm=False, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
 
-        super().__init__(model_path=model_path, api_server=api_server, additional_servers=additional_servers, api_model_name=api_model_name, grpc=grpc, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
+        super().__init__(model_path=model_path, api_server=api_server, additional_servers=additional_servers, api_model_name=api_model_name, grpc=grpc, vllm=vllm, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
 
         with open(f"{self.model_path}/tokenizer.json", 'r') as token_file:
             gpt_tokenizer = json.load(token_file)
@@ -543,6 +543,8 @@ class SUTServer(SUT):
         response_ids = [qitem_id]
         if self.grpc:
             output_tokens = self.stream_api_grpc(decoded, response_ids, idx)
+        elif self.vllm:
+            output_tokens = self.stream_api_vllm(decoded, response_ids, idx)
         else:
             output_tokens = self.stream_api(decoded, response_ids, idx)
 
