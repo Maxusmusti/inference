@@ -550,7 +550,7 @@ class SUTServer(SUT):
                                 inter = json.loads(decoded[6:])["choices"][0]["logprobs"]
                                 if "top_logprobs" in inter:
                                     token_s = list(inter["top_logprobs"][0].keys())[0]
-                                    token = self.gpt_vocab[token_s]
+                                    token = self.llama_vocab[token_s]
                                     if first:
                                         self.first_token_queue.put((token, response_ids[0]))
                                         first = False
