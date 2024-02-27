@@ -4,8 +4,9 @@ Prerequisites:
  - Install the OpenShift AI model serving stack
  - Add your AWS credentials to `secret.yaml` access the model files
  - Apply `secret.yaml`, `sa.yaml`
- - FOR CAIKIT: Apply `serving-runtime.yaml`, then finally `model.yaml`
- - FOR TGIS STANDALONE: Apply `serving-tgis.yaml`, then finally `model-tgis.yaml`
+ - FOR CAIKIT+TGIS: Apply `serving-runtime.yaml`, then finally `model.yaml`
+ - FOR TGIS: Apply `serving-tgis.yaml`, then finally `model-tgis.yaml`
+ - FOR VLLM: Apply `serving-vllm.yaml`, then finally `model-vllm.yaml` (NOTE: we'll see if further instructions necessary based on performance)
  - Create a benchmark pod using `benchmark.yaml`
 
 In the pod, before any benchmark, first run `cd inference/language/llama2-70b`

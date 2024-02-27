@@ -455,8 +455,8 @@ class SUTServer(SUT):
             'model_id': 'GPT-J',
             'inputs': input,
             'parameters': {
-                'max_new_tokens': 1024,
-                'min_new_tokens': 1,
+                'max_new_tokens': 128,
+                'min_new_tokens': 30,
                 'decoding_method': "GREEDY"
             },
         }
@@ -512,31 +512,38 @@ class SUTServer(SUT):
             'stream': True,
             'logprobs': 1
         }
-    
-        token_cache = []
-        s = requests.Session()
-        first = True
-        with s.post(
-            f'{self.api_servers[idx]}/v1/completions',
-            headers=headers,
-            json=json_data,
-            verify=False,
-            stream=True
-        ) as resp:
-            for line in resp.iter_lines():
-                if line:
-                    decoded = line.decode()
-                    if decoded.startswith("data") and "[DONE]" not in decoded:
-                        inter = json.loads(decoded[6:])["choices"][0]["logprobs"]
-                        if "top_logprobs" in inter:
-                            token_s = list(inter["top_logprobs"][0].keys())[0]
-                            token = self.gpt_vocab[token_s]
-                            if first:
-                                self.first_token_queue.put((token, response_ids[0]))
-                                first = False
-                            else:
-                                token_cache.append(token)
-        return token_cache
+
+        while True:
+            try:
+                token_cache = []
+                s = requests.Session()
+                first = True
+                with s.post(
+                    f'{self.api_servers[idx]}/v1/completions',
+                    headers=headers,
+                    json=json_data,
+                    verify=False,
+                    stream=True
+                ) as resp:
+                    for line in resp.iter_lines():
+                        if line:
+                            decoded = line.decode()
+                            if decoded.startswith("data") and "[DONE]" not in decoded:
+                                inter = json.loads(decoded[6:])["choices"][0]["logprobs"]
+                                if "top_logprobs" in inter:
+                                    token_s = list(inter["top_logprobs"][0].keys())[0]
+                                    token = self.gpt_vocab[token_s]
+                                    if first:
+                                        self.first_token_queue.put((token, response_ids[0]))
+                                        first = False
+                                    else:
+                                        token_cache.append(token)
+                s.close()
+                return token_cache
+            except:
+                s.close()
+                print("Connection failure")
+            
 
     def async_process_query(self, input_ids_tensor, qitem_id, idx):
         decoded = input_ids_tensor
@@ -554,7 +561,7 @@ class SUTServer(SUT):
         response = [lg.QuerySampleResponse(
             qitem_id, bi[0], bi[1], n_tokens)]
         lg.QuerySamplesComplete(response)
-        sys.exit()
+        return
 
     def process_queries(self):
         """Processor of the queued queries. User may choose to add batching logic """

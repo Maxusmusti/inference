@@ -98,6 +98,7 @@ class SUT():
                  additional_servers=[],
                  grpc=False,
                  batch_grpc=False,
+                 vllm=False,
                  dtype="bfloat16",
                  device="cpu",
                  batch_size=None,
@@ -117,6 +118,9 @@ class SUT():
         self.api_model_name = api_model_name
         self.grpc = grpc
         self.batch_grpc = batch_grpc
+        self.vllm = vllm
+        if self.vllm and (self.grpc or self.batch_grpc):
+            sys.exit("vllm does not support grpc")
         self.device = device
 
         if not batch_size:
@@ -203,6 +207,26 @@ class SUT():
                 print("connection failure")
         return json.loads(response.text)["generated_text"]
     
+    def query_api_vllm(self, inputs, idx):
+        headers = {
+            'Content-Type': 'application/json',
+        }
+
+        json_data = {
+            'model': '/mnt/models/',
+            'prompt': inputs,
+            'max_tokens': 128,
+            'temperature': 0,
+        }
+
+        response_code = 0
+        while response_code != 200:
+            try:
+                response = requests.post(f'{self.api_servers[idx]}/v1/completions', headers=headers, json=json_data, verify=False)
+                response_code = response.status_code
+            except:
+                print("connection failure")
+        return [resp["text"] for resp in json.loads(response.text)["choices"]]
 
     def query_api_grpc(self, input, idx):
         resp = self.grpc_clients[idx].make_request([input], model_id=self.api_model_name)
@@ -219,6 +243,8 @@ class SUT():
             else:
                 with ThreadPoolExecutor(max_workers=len(chunk)) as executor:
                     output = list(executor.map(self.query_api_grpc,chunk, repeat(server_idx)))
+        elif self.vllm:
+            output = self.query_api_vllm(chunk, server_idx)
         else:
             with ThreadPoolExecutor(max_workers=len(chunk)) as executor:
                 output = list(executor.map(self.query_api,chunk, repeat(server_idx)))
@@ -398,9 +424,9 @@ class SUT():
 
 
 class SUTServer(SUT):
-    def __init__(self, model_path=None, api_server=None, additional_servers=[], api_model_name=None, grpc=False, batch_grpc=False, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
+    def __init__(self, model_path=None, api_server=None, additional_servers=[], api_model_name=None, grpc=False, batch_grpc=False, vllm=False, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
 
-        super().__init__(model_path=model_path, api_server=api_server, additional_servers=additional_servers, api_model_name=api_model_name, grpc=grpc, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
+        super().__init__(model_path=model_path, api_server=api_server, additional_servers=additional_servers, api_model_name=api_model_name, grpc=grpc, vllm=vllm, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
 
         with open(f"{self.model_path}/tokenizer.json", 'r') as token_file:
             llama_tokenizer = json.load(token_file)
@@ -490,12 +516,59 @@ class SUTServer(SUT):
                 else:
                     token_cache.append(token)
         return token_cache
+    
+    def stream_api_vllm(self, input, response_ids, idx):
+        headers = {
+            'Content-Type': 'application/json',
+        }
+
+        json_data = {
+            'model': '/mnt/models/',
+            'prompt': input,
+            'max_tokens': 128,
+            'temperature': 0,
+            'stream': True,
+            'logprobs': 1
+        }
+
+        while True:
+            try:
+                token_cache = []
+                s = requests.Session()
+                first = True
+                with s.post(
+                    f'{self.api_servers[idx]}/v1/completions',
+                    headers=headers,
+                    json=json_data,
+                    verify=False,
+                    stream=True
+                ) as resp:
+                    for line in resp.iter_lines():
+                        if line:
+                            decoded = line.decode()
+                            if decoded.startswith("data") and "[DONE]" not in decoded:
+                                inter = json.loads(decoded[6:])["choices"][0]["logprobs"]
+                                if "top_logprobs" in inter:
+                                    token_s = list(inter["top_logprobs"][0].keys())[0]
+                                    token = self.gpt_vocab[token_s]
+                                    if first:
+                                        self.first_token_queue.put((token, response_ids[0]))
+                                        first = False
+                                    else:
+                                        token_cache.append(token)
+                s.close()
+                return token_cache
+            except:
+                s.close()
+                print("Connection failure")
 
     def async_process_query(self, input_ids_tensor, qitem_id, idx):
         decoded = self.tokenizer.decode(input_ids_tensor[0])
         response_ids = [qitem_id]
         if self.grpc:
             output_tokens = self.stream_api_grpc(decoded, response_ids, idx)
+        elif self.vllm:
+            output_tokens = self.stream_api_vllm(decoded, response_ids, idx)
         else:
             output_tokens = self.stream_api(decoded, response_ids, idx)
 

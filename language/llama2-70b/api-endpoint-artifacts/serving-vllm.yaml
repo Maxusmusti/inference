@@ -19,6 +19,8 @@ spec:
         - "8080"
         - --dtype
         - float16
+        - --tensor-parallel-size
+        - "4"
       image: quay.io/rh-aiservices-bu/vllm-openai-ubi9:0.3.1-fix-2939
       name: kserve-container
       ports:
@@ -27,13 +29,13 @@ spec:
           protocol: TCP
       resources: # configure as required
         requests:
-          cpu: 12
-          memory: 128Gi
-          nvidia.com/gpu: 1
+          cpu: 16
+          memory: 512Gi
+          nvidia.com/gpu: 4
         limits:
-          cpu: 12
-          memory: 128Gi
-          nvidia.com/gpu: 1
+          cpu: 16
+          memory: 512Gi
+          nvidia.com/gpu: 4
       volumeMounts:
       - mountPath: /dev/shm
         name: dshm

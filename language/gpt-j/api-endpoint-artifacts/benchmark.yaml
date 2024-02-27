@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: mlperf-inference-gpt
+  name: mlperf-inference-gpt-2
 spec:
   restartPolicy: Never
   containers:
@@ -9,6 +9,7 @@ spec:
     image: quay.io/meyceoz/mlperf-inference-gpt:v2
     resources:
       requests:
+        cpu: 140
         memory: 20000Mi
     volumeMounts:
     - mountPath: /dev/shm
