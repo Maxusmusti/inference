@@ -1,3 +1,9 @@
+# Red Hat OpenShift Model Serving Stack Implementation
+
+Please see the `README.md` located in the `api-endpoint-artifacts` dir for instructions on running the model serving stack implementation.
+
+Below is the original guide for the reference implementation, which we retained backwards compatibility with:
+
 # Reference Implementation for llama2-70b
 
 **Basic implementation for llama2-70b. Few noteworthy items:**
