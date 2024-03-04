@@ -1,5 +1,7 @@
 import os
+import sys
 import time
+import re
 import numpy as np
 import array
 import torch
@@ -13,6 +15,17 @@ import time
 import threading
 import tqdm
 import queue
+
+from concurrent.futures.thread import ThreadPoolExecutor
+import requests
+from urllib3.exceptions import InsecureRequestWarning
+import json
+
+from inference import GrpcClient
+import more_itertools as mit
+from itertools import repeat
+
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 import logging
 from typing import TYPE_CHECKING, Optional, List
@@ -80,6 +93,12 @@ class FirstTokenStreamer(BaseStreamer):
 class SUT():
     def __init__(self,
                  model_path=None,
+                 api_server=None,
+                 api_model_name=None,
+                 additional_servers=[],
+                 grpc=False,
+                 batch_grpc=False,
+                 vllm=False,
                  dtype="bfloat16",
                  device="cpu",
                  batch_size=None,
@@ -89,11 +108,24 @@ class SUT():
                  workers=1):
 
         self.model_path = model_path or "meta-llama/Llama-2-70b-chat-hf"
+        self.api_servers = []
+        if api_server:
+            self.api_servers.append(api_server)
+        if additional_servers and not api_server:
+            sys.exit("Additional servers cannot be used without primary api server")
+        for server in additional_servers:
+            self.api_servers.append(server)
+        self.api_model_name = api_model_name
+        self.grpc = grpc
+        self.batch_grpc = batch_grpc
+        self.vllm = vllm
+        if self.vllm and (self.grpc or self.batch_grpc):
+            sys.exit("vllm does not support grpc")
         self.device = device
 
         if not batch_size:
             if device == "cpu":
-                batch_size = 1
+                batch_size = 2000
             else:
                 batch_size = 32  # Reduce to 8 if using 4 GPUs, 16 for 8.
         self.batch_size = batch_size
@@ -146,6 +178,78 @@ class SUT():
             worker.join()
 
 
+    def query_api(self, input, idx):
+        headers = {
+            'Content-Type': 'application/json',
+        }
+
+        json_data = {
+            'model_id': self.api_model_name,
+            'inputs': input,
+            'parameters': {
+                'max_new_tokens': 1024,
+                'min_new_tokens': 1,
+                'decoding_method': "GREEDY"
+            },
+        }
+
+        response_code = 0
+        while response_code != 200:
+            try:
+                response = requests.post(
+                    self.api_servers[idx],
+                    headers=headers,
+                    json=json_data,
+                    verify=False,
+                )
+                response_code = response.status_code
+            except:
+                print("connection failure")
+        return json.loads(response.text)["generated_text"]
+    
+    def query_api_vllm(self, inputs, idx):
+        headers = {
+            'Content-Type': 'application/json',
+        }
+
+        json_data = {
+            'model': '/mnt/models/',
+            'prompt': inputs,
+            'max_tokens': 1024,
+            'temperature': 0,
+        }
+
+        response_code = 0
+        while response_code != 200:
+            try:
+                response = requests.post(f'{self.api_servers[idx]}/v1/completions', headers=headers, json=json_data, verify=False)
+                response_code = response.status_code
+            except:
+                print("connection failure")
+        return [resp["text"] for resp in json.loads(response.text)["choices"]]
+
+    def query_api_grpc(self, input, idx):
+        resp = self.grpc_clients[idx].make_request([input], model_id=self.api_model_name)
+        return resp.responses[0].text
+
+    def query_api_batch_grpc(self, inputs, idx):
+        resps = self.grpc_clients[idx].make_request(inputs, model_id=self.api_model_name)
+        return [resp.text for resp in resps.responses]
+    
+    def api_action_handler(self, chunk, server_idx):
+        if self.grpc:
+            if self.batch_grpc:
+                output = self.query_api_batch_grpc(chunk, server_idx)
+            else:
+                with ThreadPoolExecutor(max_workers=len(chunk)) as executor:
+                    output = list(executor.map(self.query_api_grpc,chunk, repeat(server_idx)))
+        elif self.vllm:
+            output = self.query_api_vllm(chunk, server_idx)
+        else:
+            with ThreadPoolExecutor(max_workers=len(chunk)) as executor:
+                output = list(executor.map(self.query_api,chunk, repeat(server_idx)))
+        return output
+
     def process_queries(self):
         """Processor of the queued queries. User may choose to add batching logic """
 
@@ -191,25 +295,43 @@ class SUT():
                 assert input_ids_tensor.shape == input_masks_tensor.shape
                 assert input_ids_tensor.shape[0] <= self.batch_size
 
+                if self.api_servers:
+                    decoded = self.tokenizer.batch_decode(input_ids_tensor)
+                    cleaned = [entry.replace('</s>','').replace('<s>','') for entry in decoded]
+                    cleaned_chunks = [list(c) for c in mit.divide(len(self.api_servers), cleaned)]
+
                 tik2 = time.time()
 
-                pred_output_tokens = self.model.generate(
-                    input_ids=input_ids_tensor,
-                    attention_mask=input_masks_tensor,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    **gen_kwargs
-                )
+                if self.api_servers:
+                    with ThreadPoolExecutor(max_workers=len(self.api_servers)) as executor:
+                        #needs to be tested
+                        output_chunks = list(executor.map(self.api_action_handler,cleaned_chunks,range(len(self.api_servers))))
+                    output = []
+                    for row in output_chunks:
+                        output += row
+                else:
+                    pred_output_tokens = self.model.generate(
+                        input_ids=input_ids_tensor,
+                        attention_mask=input_masks_tensor,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        **gen_kwargs
+                    )
 
                 tik3 = time.time()
 
-                processed_output = self.data_object.postProcess(pred_output_tokens,
-                                                                input_seq_lens=input_len,
-                                                                query_id_list=query_ids)
+                if self.api_servers:
+                    processed_output = np.array(self.tokenizer(output, padding='longest')['input_ids'])
+                else:
+                    processed_output = self.data_object.postProcess(pred_output_tokens,
+                                                                    input_seq_lens=input_len,
+                                                                    query_id_list=query_ids)
 
             for i in range(len(qitem)):
-                response_array = array.array("B", processed_output[i].tobytes())
+                unpadded = np.delete(processed_output[i], np.where(processed_output[i] == 2))
+                n_tokens = unpadded.shape[0]
+                response_array = array.array("B", unpadded.tobytes())
                 bi = response_array.buffer_info()
-                response = [lg.QuerySampleResponse(qitem[i].id, bi[0], bi[1])]
+                response = [lg.QuerySampleResponse(qitem[i].id, bi[0], bi[1], n_tokens)]
                 lg.QuerySamplesComplete(response)
 
             tok = time.time()
@@ -227,26 +349,45 @@ class SUT():
 
 
     def load_model(self):
-        self.model = LlamaForCausalLM.from_pretrained(
-            self.model_path,
-            device_map="auto",
-            low_cpu_mem_usage=True,
-            torch_dtype=self.amp_dtype
-        )
-        print("Loaded model")
+        if self.api_servers:
+            if not self.api_model_name:
+                sys.exit("API Server was specified but no model name was provided")
+            self.grpc_clients = []
+            for server in self.api_servers:
+                if self.grpc:
+                    hostname = re.sub("https://|http://", "", server)
+                    if hostname[-1] == "/":
+                        hostname = hostname[:-1]
+                    grpc_client = GrpcClient(
+                        hostname,
+                        443,
+                        verify=False,
+                    )
+                    self.grpc_clients.append(grpc_client)
+                elif not "http" in server:
+                    server = "http://" + server
 
-        self.device = torch.device(self.device)
-        if self.device == "cpu":
-            self.model = self.model.to(self.device)  # Force CPU if your system has GPU and you specifically want CPU-only run
+        else:
+            self.model = LlamaForCausalLM.from_pretrained(
+                self.model_path,
+                device_map="auto",
+                low_cpu_mem_usage=True,
+                torch_dtype=self.amp_dtype
+            )
+            print("Loaded model")
 
-        self.model.eval()
-        self.model = self.model.to(memory_format=torch.channels_last)
+            self.device = torch.device(self.device)
+            if self.device == "cpu":
+                self.model = self.model.to(self.device)  # Force CPU if your system has GPU and you specifically want CPU-only run
+
+            self.model.eval()
+            self.model = self.model.to(memory_format=torch.channels_last)
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_path,
             model_max_length=1024,
             padding_side="left",
-            use_fast=False,)
+            use_fast=True,) #changed from false
 
         self.tokenizer.pad_token = self.tokenizer.eos_token
         print("Loaded tokenizer")
@@ -284,11 +425,16 @@ class SUT():
 
 
 class SUTServer(SUT):
-    def __init__(self, model_path=None, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
+    def __init__(self, model_path=None, api_server=None, additional_servers=[], api_model_name=None, grpc=False, batch_grpc=False, vllm=False, dtype="bfloat16", device="cpu", total_sample_count=24576, dataset_path=None, workers=1):
 
-        super().__init__(model_path=model_path, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
+        super().__init__(model_path=model_path, api_server=api_server, additional_servers=additional_servers, api_model_name=api_model_name, grpc=grpc, vllm=vllm, dtype=dtype, device=device, total_sample_count=total_sample_count, dataset_path=dataset_path, workers=workers)
+
+        with open(f"{self.model_path}/tokenizer.json", 'r') as token_file:
+            llama_tokenizer = json.load(token_file)
+        self.llama_vocab = llama_tokenizer["model"]["vocab"]
 
         self.first_token_queue = queue.Queue()
+        
 
     def start(self):
 
@@ -314,13 +460,132 @@ class SUTServer(SUT):
 
             first_tokens, response_id = first_token_item
 
-            response_data = array.array("B", np.array(first_tokens, np.float32).tobytes())
+            response_data = array.array("B", np.array(first_tokens, np.int32).tobytes())
             bi = response_data.buffer_info()
             response = [lg.QuerySampleResponse(response_id, bi[0], bi[1])]
             lg.FirstTokenComplete(response)
 
+    def stream_api(self, input, response_ids, idx):
+        headers = {
+            'Content-Type': 'application/json',
+        }
+
+        json_data = {
+            'model_id': 'Llama-2-70b-chat-hf-caikit',
+            'inputs': input,
+            'parameters': {
+                'max_new_tokens': 1024,
+                'min_new_tokens': 1,
+                'decoding_method': "GREEDY"
+            },
+        }
+
+        token_cache = []
+        s = requests.Session()
+        first = True
+        with s.post(
+            self.api_servers[idx],
+            headers=headers,
+            json=json_data,
+            verify=False,
+            stream=True
+        ) as resp:
+            for line in resp.iter_lines():
+                if line:
+                    decoded = line.decode()
+                    if decoded.startswith("data"):
+                        token_l = json.loads(decoded[6:])["tokens"]
+                        if token_l:
+                            token = self.llama_vocab[token_l[0]["text"]]
+                            if first:
+                                self.first_token_queue.put((token, response_ids[0]))
+                                first = False
+                            token_cache.append(token)
+        return token_cache
+
+    def stream_api_grpc(self, input, response_ids, idx):
+        token_cache = []
+        first = True
+        resps = self.grpc_clients[idx].make_request_stream(input, model_id=self.api_model_name)
+        for resp in resps:
+            if resp.tokens:
+                token = self.llama_vocab[resp.tokens[0].text]
+                if first:
+                    self.first_token_queue.put((token, response_ids[0]))
+                    first = False
+                token_cache.append(token)
+        return token_cache
+    
+    def stream_api_vllm(self, input, response_ids, idx):
+        headers = {
+            'Content-Type': 'application/json',
+        }
+
+        json_data = {
+            'model': '/mnt/models/',
+            'prompt': input,
+            'max_tokens': 1024,
+            'temperature': 0,
+            'stream': True,
+            'logprobs': 1
+        }
+
+        while True:
+            try:
+                token_cache = []
+                s = requests.Session()
+                first = True
+                with s.post(
+                    f'{self.api_servers[idx]}/v1/completions',
+                    headers=headers,
+                    json=json_data,
+                    verify=False,
+                    stream=True
+                ) as resp:
+                    for line in resp.iter_lines():
+                        if line:
+                            decoded = line.decode()
+                            if decoded.startswith("data") and "[DONE]" not in decoded:
+                                inter = json.loads(decoded[6:])["choices"][0]["logprobs"]
+                                if "top_logprobs" in inter:
+                                    token_s = list(inter["top_logprobs"][0].keys())[0]
+                                    token = self.llama_vocab[token_s]
+                                    if first:
+                                        self.first_token_queue.put((token, response_ids[0]))
+                                        first = False
+                                    token_cache.append(token)
+                s.close()
+                if token_cache:
+                    return token_cache
+            except:
+                s.close()
+                print("Connection failure")
+
+    def async_process_query(self, input_ids_tensor, qitem_id, idx):
+        decoded = self.tokenizer.decode(input_ids_tensor[0])
+        response_ids = [qitem_id]
+        if self.grpc:
+            output_tokens = self.stream_api_grpc(decoded, response_ids, idx)
+        elif self.vllm:
+            output_tokens = self.stream_api_vllm(decoded, response_ids, idx)
+        else:
+            output_tokens = self.stream_api(decoded, response_ids, idx)
+
+        n_tokens = len(output_tokens)
+        if n_tokens <= 1:
+            print("WARNING: caught low token count")
+            print(input_ids_tensor)
+            print(output_tokens)
+        response_array = array.array("B", np.array(output_tokens, np.int32).tobytes())
+        bi = response_array.buffer_info()
+        response = [lg.QuerySampleResponse(
+            qitem_id, bi[0], bi[1], n_tokens)]
+        lg.QuerySamplesComplete(response)
+        sys.exit()
+
     def process_queries(self):
         """Processor of the queued queries. User may choose to add batching logic """
+        server_idx = 0
         while True:
 
             qitem = self.query_queue.get()
@@ -330,24 +595,29 @@ class SUTServer(SUT):
             input_ids_tensor = self.data_object.input_ids[qitem.index]
             input_masks_tensor = self.data_object.attention_masks[qitem.index]
 
-            #TODO: This PoC is super slow with significant overhead. Best to create a patch to `generate`
-            tokens_cache = []
-            tokens_streamer = FirstTokenStreamer(self.first_token_queue, tokens_cache=tokens_cache, is_first_token=True, response_ids=[qitem.id])
+            if self.api_servers:
+                threading.Thread(target=self.async_process_query, args=(input_ids_tensor, qitem.id, server_idx)).start()
+                server_idx = (server_idx + 1) % len(self.api_servers)
+            else:
+                #TODO: This PoC is super slow with significant overhead. Best to create a patch to `generate`
+                tokens_cache = []
+                tokens_streamer = FirstTokenStreamer(self.first_token_queue, tokens_cache=tokens_cache, is_first_token=True, response_ids=[qitem.id])
 
-            _ = self.model.generate(    input_ids=input_ids_tensor,
-                                        attention_mask=input_masks_tensor,
-                                        pad_token_id=self.tokenizer.pad_token_id,
-                                        streamer = tokens_streamer,
-                                        **gen_kwargs
-                                        )
+                _ = self.model.generate(    input_ids=input_ids_tensor,
+                                            attention_mask=input_masks_tensor,
+                                            pad_token_id=self.tokenizer.pad_token_id,
+                                            streamer = tokens_streamer,
+                                            **gen_kwargs
+                                            )
 
-            output_tokens = tokens_streamer.get_out_tokens()
+                output_tokens = tokens_streamer.get_out_tokens()
 
-            response_array = array.array("B", np.array(output_tokens, np.int32).tobytes())
-            bi = response_array.buffer_info()
-            response = [lg.QuerySampleResponse(
-                qitem.id, bi[0], bi[1])]
-            lg.QuerySamplesComplete(response)
+                n_tokens = len(output_tokens)
+                response_array = array.array("B", np.array(output_tokens, np.int32).tobytes())
+                bi = response_array.buffer_info()
+                response = [lg.QuerySampleResponse(
+                    qitem.id, bi[0], bi[1], n_tokens)]
+                lg.QuerySamplesComplete(response)
 
 
     def issue_queries(self, query_samples):

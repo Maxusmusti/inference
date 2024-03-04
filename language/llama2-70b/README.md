@@ -1,10 +1,18 @@
+# Red Hat OpenShift Model Serving Stack Implementation
+
+Please see the `README.md` located in the `api-endpoint-artifacts` dir for instructions on running the model serving stack implementation.
+
+Below is the original guide for the reference implementation, which we retained backwards compatibility with:
+
 # Reference Implementation for llama2-70b
 
 **Basic implementation for llama2-70b. Few noteworthy items:**
 
 + Processing of Validation dataset is not finalized yet. Decision on input token lengths is pending
 + Streamer for communicating with loadgen has quite some overhead. This is only meant to provide functional implementation
-
++ For custom/optimized implementations of this benchmark it is important to include the :
+        - For server scenario, it is necesary to call `lg.FirstTokenComplete(response)` for each query. This way the first token will be reported and it's latency will be measured.
+        - For all scenarios, when calling `lg.QuerySamplesComplete(response)`, it is necessary that each of the elements in response is a `lg.QuerySampleResponse` that contains the number of tokens (can be create this way: `lg.QuerySampleResponse(qitem.id, bi[0], bi[1], n_tokens)`). The number of tokens reported should match with the number of tokens on your answer and this will be checked in [TEST06](../../compliance/nvidia/TEST06/)
 
 ## Prepare environment
 
@@ -62,7 +70,12 @@ CPU-only setup, as well as any GPU versions for applicable libraries like PyTorc
 
 
 ## Get Model
-+ For now, MLCommons is not hosting the checkpoint, so you must first go to [llama2-request-link](https://ai.meta.com/resources/models-and-libraries/llama-downloads/) and make a request, sign in to huggingface (if you don't have account, you'd need to create one). **Please note your authentication credentials** as you may be required to provide them when cloninng below
+### MLCommons Members Download
+MLCommons hosts the model and preprocessed dataset for download exclusively by MLCommons Members. You must first agree to the [confidentiality notice](https://docs.google.com/forms/d/e/1FAIpQLSc_8VIvRmXM3I8KQaYnKf7gy27Z63BBoI_I1u02f4lw6rBp3g/viewform), then follow the link to a directory containing Rclone download instructions.
+
+
+### External Download
++ First go to [llama2-request-link](https://ai.meta.com/resources/models-and-libraries/llama-downloads/) and make a request, sign in to HuggingFace (if you don't have account, you'll need to create one). **Please note your authentication credentials** as you may be required to provide them when cloning below.
 + Requires Git Large Files Storage
 ```
 export CHECKPOINT_PATH=${PWD}/Llama-2-70b-chat-hf
@@ -72,6 +85,29 @@ git clone https://huggingface.co/meta-llama/Llama-2-70b-chat-hf ${CHECKPOINT_PAT
 ```
 
 ## Get Dataset
+
+### Preprocessed
+
+You can use Rclone to download the preprocessed dataset from a Cloudflare R2 bucket.
+
+To run Rclone on Windows, you can download the executable [here](https://rclone.org/install/#windows).
+To install Rclone on Linux/macOS/BSD systems, run:
+```
+sudo -v ; curl https://rclone.org/install.sh | sudo bash
+```
+Once Rclone is installed, run the following command to authenticate with the bucket:
+```
+rclone config create mlc-inference s3 provider=Cloudflare access_key_id=f65ba5eef400db161ea49967de89f47b secret_access_key=fbea333914c292b854f14d3fe232bad6c5407bf0ab1bebf78833c2b359bdfd2b endpoint=https://c2686074cb2caf5cbaf6d134bdba8b47.r2.cloudflarestorage.com
+```
+You can then navigate in the terminal to your desired download directory and run the following command to download the dataset:
+
+```
+rclone copy mlc-inference:mlcommons-inference-wg-public/open_orca ./open_orca -P
+```
+
+### Unprocessed
+
+You can also download and process the dataset yourself as follows:
 
 ```
 # First get the `open-orca` parquet from huggingface
@@ -195,15 +231,15 @@ if [ -e ${ACCURACY_LOG_FILE} ]; then
 fi
 ```
 
-The ServerSUT was not tested for GPU runs. You can try setting `--device cuda:0`, but YMMV.
+The ServerSUT was not tested for GPU runs.
 
 
 ## Accuracy Target
 Running the GPU implementation in FP32 precision resulted in the following FP32 accuracy targets (normalized to a 0-100
 scale from a 0.0-1.0 scale):
-- Rouge1: 43.88
-- Rouge2: 21.7108
-- RougeL: 28.2502
-- RougeLsum: 41.4821
+- Rouge1: 44.4312
+- Rouge2: 22.0352
+- RougeL: 28.6162
+- Tokens per sample: 294.45
 
-This was run an 8xH100 node. Total runtime was ~4.5 days.
+This was run on a DGX-H100 node. Total runtime was ~4.5 days.

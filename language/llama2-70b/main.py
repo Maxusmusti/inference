@@ -16,7 +16,13 @@ def get_args():
     parser.add_argument("--scenario", type=str, choices=["Offline", "Server"], default="Offline", help="Scenario")
     parser.add_argument("--model-path", type=str, default="meta-llama/Llama-2-70b-chat-hf", help="Model name")
     parser.add_argument("--dataset-path", type=str, default=None, help="")
+    parser.add_argument("--api-server", type=str, default=None, help="Specify an api endpoint call to use api mode")
+    parser.add_argument("--api-model-name", type=str, default=None, help="Specify a model name to use api mode")
+    parser.add_argument("--additional-servers", nargs='+', default=[], help="Specify additional endpoints for load splitting")
     parser.add_argument("--accuracy", action="store_true", help="Run accuracy mode")
+    parser.add_argument("--grpc", action="store_true", help="Enable grpc for api endpoint")
+    parser.add_argument("--batch-grpc", action="store_true", help="Enable batch requests for grpc")
+    parser.add_argument("--vllm", action="store_true", help="Switch runtime to vllm for api endpoint")
     parser.add_argument("--dtype", type=str, default="float32", help="data type of the model, choose from float16, bfloat16 and float32")
     parser.add_argument("--device", type=str,  choices=["cpu", "cuda:0"], default="cpu", help="device to use")
     parser.add_argument("--audit-conf", type=str, default="audit.conf", help="audit config for LoadGen settings during compliance runs")
@@ -68,6 +74,12 @@ def main():
 
     sut = sut_cls(
         model_path=args.model_path,
+        api_server=args.api_server,
+        api_model_name=args.api_model_name,
+        additional_servers=args.additional_servers,
+        grpc=args.grpc,
+        batch_grpc=args.batch_grpc,
+        vllm=args.vllm,
         dtype=args.dtype,
         dataset_path=args.dataset_path,
         total_sample_count=args.total_sample_count,
