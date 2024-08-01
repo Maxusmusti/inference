@@ -1,0 +1,66 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  annotations:
+    opendatahub.io/template-display-name: ServingRuntime for vLLM | Topsail
+  labels:
+    opendatahub.io/dashboard: "true"
+  name: vllm-llama-servingruntime
+  namespace: llama
+spec:
+  builtInAdapter:
+    modelLoadingTimeoutMillis: 90000
+  containers:
+  - args:
+    - --model=/mnt/models/
+    - --download-dir=/models-cache
+    - --port=8080
+    - --distributed-executor-backend=mp
+    - --tensor-parallel-size=2
+    - --max-model-len=2048
+    - --enable-chunked-prefill
+    - --gpu-memory-utilization=0.95
+    - --max-num-seqs=512
+    # - --dtype=fp8
+    # - --kv-cache-dtype=fp8
+    image: quay.io/wxpe/tgis-vllm:2a60ad3
+    name: kserve-container
+    ports:
+    - containerPort: 8080
+      name: http1
+      protocol: TCP
+    volumeMounts:
+    - mountPath: /home/vllm
+      name: home
+    - mountPath: /.cache
+      name: cache
+    - mountPath: /.config
+      name: config
+    - mountPath: /dev/shm
+      name: shared-memory
+    - mountPath: /tmp
+      name: tmp
+    resources:
+      limits:
+        nvidia.com/gpu: "2"
+      requests:
+        cpu: "8"
+        memory: 40Gi
+        nvidia.com/gpu: "2"
+  multiModel: false
+  supportedModelFormats:
+  - autoSelect: true
+    name: pytorch
+  volumes:
+  - emptyDir:
+      medium: Memory
+      sizeLimit: 32Gi
+    name: shared-memory
+  - emptyDir: {}
+    name: tmp
+  - emptyDir: {}
+    name: home
+  - emptyDir: {}
+    name: cache
+  - emptyDir: {}
+    name: config

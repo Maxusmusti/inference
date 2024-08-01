@@ -1,0 +1,111 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: '8'
+  resourceVersion: '249593'
+  name: vllm
+  generation: 24
+  namespace: gpt-service
+  labels:
+    app: vllm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: vllm
+    spec:
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      affinity: {}
+      terminationGracePeriodSeconds: 120
+      securityContext: {}
+      containers:
+        - resources:
+            limits:
+              cpu: '12'
+              memory: 128Gi
+              nvidia.com/gpu: '1'
+            requests:
+              cpu: '12'
+              memory: 128Gi
+              nvidia.com/gpu: '1'
+#          readinessProbe:
+#            httpGet:
+#              path: /health
+#              port: http
+#              scheme: HTTP
+#            timeoutSeconds: 5
+#            periodSeconds: 30
+#            successThreshold: 1
+#            failureThreshold: 3
+          terminationMessagePath: /dev/termination-log
+          name: server
+#          livenessProbe:
+#            httpGet:
+#              path: /health
+#              port: http
+#              scheme: HTTP
+#            timeoutSeconds: 8
+#            periodSeconds: 100
+#            successThreshold: 1
+#            failureThreshold: 3
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          imagePullPolicy: IfNotPresent
+#          startupProbe:
+#            httpGet:
+#              path: /health
+#              port: http
+#              scheme: HTTP
+#            timeoutSeconds: 1
+#            periodSeconds: 30
+#            successThreshold: 1
+#            failureThreshold: 24
+          volumeMounts:
+            - name: models-cache
+              mountPath: /models-cache
+            - name: shm
+              mountPath: /dev/shm
+          terminationMessagePolicy: File
+          image: 'quay.io/rh-aiservices-bu/vllm-openai-ubi9:0.3.1-fix-2939'
+          args:
+            - '--model'
+            - /models-cache/gpt-model-info/
+#            - EleutherAI/gpt-j-6b
+            - '--download-dir'
+            - /models-cache
+            - '--dtype'
+            - float16
+      volumes:
+        - name: models-cache
+          persistentVolumeClaim:
+            claimName: vllm-model-cache
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+      dnsPolicy: ClusterFirst
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600

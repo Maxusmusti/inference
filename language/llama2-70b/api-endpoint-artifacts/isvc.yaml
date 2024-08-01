@@ -1,0 +1,18 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+    serving.kserve.io/enable-prometheus-scraping: "true"
+  labels:
+    opendatahub.io/dashboard: "true"
+  name: llama-2-70b-fp8-isvc
+  namespace: llama
+spec:
+  predictor:
+    minReplicas: 1
+    model:
+      modelFormat:
+        name: pytorch
+      runtime: vllm-llama-servingruntime
+      storageUri: pvc://model-storage/Llama-2-70b-chat-hf-fp8

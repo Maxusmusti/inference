@@ -3,7 +3,7 @@ import time
 import numpy as np
 import torch
 from datasets import load_dataset, load_from_disk
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from tokenizer_GPTJ import get_transformer_autotokenizer
 from torch.nn.functional import pad
 from torch.utils.data import DataLoader
 from typing import Optional, Dict, Sequence
@@ -36,11 +36,7 @@ class Dataset():
         self.pad_val = pad_val
         self.pad_max = pad_max
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_name,
-            model_max_length=2048,
-            padding_side="left",
-            use_fast=False,)
+        self.tokenizer = get_transformer_autotokenizer(self.model_name)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
         self.list_data_dict = utils.jload(self.dataset_path)
@@ -51,7 +47,7 @@ class Dataset():
         self.targets = [
             f"{example['output']}" for example in self.list_data_dict]
 
-        self.source_encoded_input_ids, self.source_encoded_attn_masks = self.encode_samples()
+        self.source_encoded_input_ids = self.encode_samples()#, self.source_encoded_attn_masks = self.encode_samples()
 
         self.count = total_count_override or len(self.sources)
         self.perf_count = perf_count_override or self.count
@@ -62,16 +58,20 @@ class Dataset():
         total_samples = len(self.sources)
 
         source_encoded_input_ids = []
-        source_encoded_attn_masks = []
+        #source_encoded_attn_masks = []
 
         for i in range(total_samples):
-            source_encoded = self.tokenizer(self.sources[i], return_tensors="pt",
-                                            padding=True, truncation=True,
-                                            max_length=1919)
-            source_encoded_input_ids.append(source_encoded.input_ids)
-            source_encoded_attn_masks.append(source_encoded.attention_mask)
+            #source_encoded = self.tokenizer(self.sources[i], return_tensors="pt",
+            #                                padding=True, truncation=True,
+            #                                max_length=1919)
+            tok = self.tokenizer(self.sources[i])["input_ids"]
+            while len(tok) > 1920:
+                self.sources[i] = self.sources[i][:-16 - (len(tok) - 1920)*4] + self.sources[i][-16:]
+                tok = self.tokenizer(self.sources[i])["input_ids"]
+            source_encoded_input_ids.append(self.sources[i])
+            #source_encoded_attn_masks.append(source_encoded.attention_mask)
 
-        return source_encoded_input_ids, source_encoded_attn_masks
+        return source_encoded_input_ids#, source_encoded_attn_masks
 
     def LoadSamplesToRam(self, sample_list):
         pass
