@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: mlperf-inference-240724
+  name: mlperf-inference
 spec:
   restartPolicy: Never
   containers:
